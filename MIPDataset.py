@@ -120,6 +120,12 @@ def binary_positional_features(n_vars: int, to_pm1: bool = False):
     return codes, B
 
 
+def get_discrete_var_indices(b_vars, i_vars):
+    if b_vars.numel() == 0 and i_vars.numel() == 0:
+        return torch.empty(0, dtype=torch.int32)
+    return torch.cat([b_vars, i_vars]).to(torch.int32)
+
+
 
 def compute_mip_representation(mip_file):
     """given a mip instance, compute features and return pytorch_geometric data instance describing variable constraint graph
@@ -424,15 +430,10 @@ class GraphDataset(torch_geometric.data.Dataset):
 
         varNames = solData['var_names']
         sols = solData['sols']
-        # change
-        for sol in sols:          # iterate over each solution
-            for i in range(len(sol)):  
-                if sol[i] > 1:
-                    sol[i] = 1
         objs = solData['objs']
         pd_gap = solData['pd_gap']
         instance_name = inspath
-        sols=np.round(sols,0)
+        sols = np.round(sols, 0)
         
         negative_sample = sols[max(sols.shape[0]-350,50):]
         negative_sample_objective = objs[max(objs.shape[0]-350,50):]
@@ -458,7 +459,8 @@ class GraphDataset(torch_geometric.data.Dataset):
 
         varname_map=torch.tensor(varname_map)
 
-        graph.varInds = [[varname_map],[i_vars]]
+        discrete_vars = get_discrete_var_indices(b_vars, i_vars)
+        graph.varInds = [[varname_map], [discrete_vars], [b_vars], [i_vars]]
 
         graph.pd_gap = pd_gap
         graph.instance_name = instance_name
@@ -469,7 +471,7 @@ class GraphDataset(torch_geometric.data.Dataset):
 
 
         if not (instance_name in self.negative_examples_dict):
-            self.negative_examples_dict[instance_name] = np.array(generate_neg_samples(instance_name, sols, varNames, varname_map, i_vars, args=self.input_args, filename=self.sample_files[index]))
+            self.negative_examples_dict[instance_name] = np.array(generate_neg_samples(instance_name, sols, varNames, varname_map, discrete_vars, args=self.input_args, filename=self.sample_files[index]))
             print("Finish processing data for", instance_name)
 
         negative_samples = self.negative_examples_dict[instance_name]
@@ -607,15 +609,10 @@ class GraphDataset_id_v1(torch_geometric.data.Dataset):
 
         varNames = solData['var_names']
         sols = solData['sols']
-        # change
-        for sol in sols:          # iterate over each solution
-            for i in range(len(sol)):  
-                if sol[i] > 1:
-                    sol[i] = 1
         objs = solData['objs']
         pd_gap = solData['pd_gap']
         instance_name = inspath
-        sols=np.round(sols,0)
+        sols = np.round(sols, 0)
         
         negative_sample = sols[max(sols.shape[0]-350,50):]
         negative_sample_objective = objs[max(objs.shape[0]-350,50):]
@@ -641,13 +638,14 @@ class GraphDataset_id_v1(torch_geometric.data.Dataset):
 
         varname_map=torch.tensor(varname_map)
 
-        graph.varInds = [[varname_map],[i_vars]]
+        discrete_vars = get_discrete_var_indices(b_vars, i_vars)
+        graph.varInds = [[varname_map], [discrete_vars], [b_vars], [i_vars]]
 
         graph.pd_gap = pd_gap
         graph.instance_name = instance_name
 
         if not (instance_name in self.negative_examples_dict):
-            self.negative_examples_dict[instance_name] = np.array(generate_neg_samples(instance_name, sols, varNames, varname_map, i_vars, args=self.input_args, filename=self.sample_files[index]))
+            self.negative_examples_dict[instance_name] = np.array(generate_neg_samples(instance_name, sols, varNames, varname_map, discrete_vars, args=self.input_args, filename=self.sample_files[index]))
             print("Finish processing data for", instance_name)
 
         negative_samples = self.negative_examples_dict[instance_name]

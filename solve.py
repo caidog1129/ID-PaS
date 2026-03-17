@@ -1,90 +1,159 @@
-import sys
-import gurobipy as gp
-from gurobipy import GRB
+import argparse
 import os
 import time
+from dataclasses import dataclass
 
-"""
-solve_instance.py
------------------
-Loads a model file readable by Gurobi, solves it on a single thread, and writes a
-summary report (plus full decision‑variable values if optimal) to the
-``solutions_very_hard`` folder.
+import gurobipy as gp
+from gurobipy import GRB
 
-New statistics added (replacing the old matrix‑shape line):
-  • Total variables, and the breakdown by binary, integer, and continuous
-  • Total constraints, and the breakdown by sense (=, ≤, ≥)
-  • Total non‑zeros in the constraint matrix
-  • Runtime in seconds
-"""
 
-# === Check CLI arguments ===
-if len(sys.argv) != 2:
-    print("Usage: python solve_instance.py <instance_file>")
-    sys.exit(1)
+@dataclass
+class ModelStats:
+    num_vars: int
+    num_bin: int
+    num_int: int
+    num_cont: int
+    num_constrs: int
+    num_eq: int
+    num_leq: int
+    num_geq: int
+    num_nz: int
 
-instance_file = sys.argv[1]
-model_name = os.path.splitext(os.path.basename(instance_file))[0]
-output_folder = "solution_new"
-os.makedirs(output_folder, exist_ok=True)
-log_folder = "new"
-os.makedirs(log_folder, exist_ok=True)
 
-try:
-    # === Load model and collect pre‑solve statistics ===
-    start_time = time.time()
-    model = gp.read(instance_file)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Solve a single Gurobi-readable instance and write a text report with "
+            "basic model statistics and the best solution found."
+        )
+    )
+    parser.add_argument("instance_file", help="Path to the instance file to solve.")
+    parser.add_argument(
+        "--output-dir",
+        default="solution_new",
+        help="Directory where the solution report will be written.",
+    )
+    parser.add_argument(
+        "--log-dir",
+        default="new",
+        help="Directory where the Gurobi log file will be written.",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        help="Number of Gurobi threads to use.",
+    )
+    parser.add_argument(
+        "--write-vars",
+        action="store_true",
+        help="Include variable assignments when a feasible solution is available.",
+    )
+    return parser.parse_args()
 
-    num_vars = model.numVars
-    num_bin  = sum(1 for v in model.getVars() if v.VType == GRB.BINARY)
-    num_int  = sum(1 for v in model.getVars() if v.VType == GRB.INTEGER)
-    num_cont = sum(1 for v in model.getVars() if v.VType == GRB.CONTINUOUS)
 
-    num_constrs = model.numConstrs
-    num_eq   = sum(1 for c in model.getConstrs() if c.Sense == '=')
-    num_leq  = sum(1 for c in model.getConstrs() if c.Sense == '<')
-    num_geq  = sum(1 for c in model.getConstrs() if c.Sense == '>')
+def collect_model_stats(model: gp.Model) -> ModelStats:
+    variables = model.getVars()
+    constraints = model.getConstrs()
 
-    num_nz = model.numNZs  # non‑zeros in the constraint matrix
+    return ModelStats(
+        num_vars=model.numVars,
+        num_bin=sum(1 for var in variables if var.VType == GRB.BINARY),
+        num_int=sum(1 for var in variables if var.VType == GRB.INTEGER),
+        num_cont=sum(1 for var in variables if var.VType == GRB.CONTINUOUS),
+        num_constrs=model.numConstrs,
+        num_eq=sum(1 for constr in constraints if constr.Sense == "="),
+        num_leq=sum(1 for constr in constraints if constr.Sense == "<"),
+        num_geq=sum(1 for constr in constraints if constr.Sense == ">"),
+        num_nz=model.numNZs,
+    )
 
-    # === Solve ===
-    model.Params.Threads = 1
-    log_path = os.path.join(log_folder, model_name)
-    model.Params.LogFile = log_path
-    model.optimize()
-    runtime = time.time() - start_time
 
-    # === Write results ===
-    report_path = os.path.join(output_folder, model_name)
-    with open(report_path, "w") as f:
-        # General run info
-        f.write(f"Runtime (seconds): {runtime:.2f}\n")
+def status_name(status_code: int) -> str:
+    for name in dir(GRB.Status):
+        if name.startswith("_"):
+            continue
+        if getattr(GRB.Status, name) == status_code:
+            return name
+    return f"UNKNOWN_STATUS_{status_code}"
 
-        # Variable statistics
-        f.write(f"# Variables: {num_vars}\n")
-        f.write(f"  • Binary     : {num_bin}\n")
-        f.write(f"  • Integer    : {num_int}\n")
-        f.write(f"  • Continuous : {num_cont}\n")
 
-        # Constraint statistics
-        f.write(f"# Constraints: {num_constrs}\n")
-        f.write(f"  • Equality ( = ) : {num_eq}\n")
-        f.write(f"  • Less‑eq  ( ≤ ) : {num_leq}\n")
-        f.write(f"  • Greater‑eq( ≥ ) : {num_geq}\n")
+def objective_sense_name(model: gp.Model) -> str:
+    if model.ModelSense == GRB.MINIMIZE:
+        return "minimize"
+    return "maximize"
 
-        # Matrix sparsity
-        f.write(f"# Non‑zeros in A: {num_nz}\n\n")
 
-        # Solution values if solved to optimality
-        if model.status == GRB.OPTIMAL:
-            f.write(f"Optimal Objective Value: {model.ObjVal}\n\n")
-            f.write("Optimal Variable Values:\n")
-            for v in model.getVars():
-                f.write(f"{v.varName} = {v.x}\n")
-        else:
-            f.write("No optimal solution found.\n")
+def write_report(
+    report_path: str,
+    model: gp.Model,
+    stats: ModelStats,
+    runtime: float,
+    write_vars: bool,
+) -> None:
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(f"Runtime (seconds): {runtime:.2f}\n")
+        handle.write(f"Status: {status_name(model.Status)}\n")
+        handle.write(f"Objective sense: {objective_sense_name(model)}\n")
+        handle.write(f"Solutions found: {model.SolCount}\n")
 
-except Exception as e:
-    print(f"Error processing {instance_file}: {str(e)}")
-    with open(f"{output_folder}/{model_name}_error.txt", "w") as f:
-        f.write(f"Error processing {instance_file}: {str(e)}\n")
+        if model.SolCount > 0:
+            handle.write(f"Best objective value: {model.ObjVal}\n")
+
+        if model.Status in {GRB.OPTIMAL, GRB.TIME_LIMIT, GRB.SUBOPTIMAL} and hasattr(model, "ObjBound"):
+            handle.write(f"Best bound: {model.ObjBound}\n")
+
+        if model.SolCount > 0 and hasattr(model, "MIPGap"):
+            handle.write(f"MIP gap: {model.MIPGap}\n")
+
+        handle.write("\n")
+        handle.write(f"# Variables: {stats.num_vars}\n")
+        handle.write(f"  - Binary: {stats.num_bin}\n")
+        handle.write(f"  - Integer: {stats.num_int}\n")
+        handle.write(f"  - Continuous: {stats.num_cont}\n")
+
+        handle.write(f"# Constraints: {stats.num_constrs}\n")
+        handle.write(f"  - Equality (=): {stats.num_eq}\n")
+        handle.write(f"  - Less-equal (<=): {stats.num_leq}\n")
+        handle.write(f"  - Greater-equal (>=): {stats.num_geq}\n")
+
+        handle.write(f"# Non-zeros in A: {stats.num_nz}\n")
+
+        if write_vars and model.SolCount > 0:
+            handle.write("\nBest solution variable values:\n")
+            for var in model.getVars():
+                handle.write(f"{var.VarName} = {var.X}\n")
+
+
+def main() -> int:
+    args = parse_args()
+    os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(args.log_dir, exist_ok=True)
+
+    instance_file = args.instance_file
+    model_name = os.path.splitext(os.path.basename(instance_file))[0]
+    report_path = os.path.join(args.output_dir, model_name)
+    log_path = os.path.join(args.log_dir, model_name)
+
+    try:
+        start_time = time.time()
+        model = gp.read(instance_file)
+        stats = collect_model_stats(model)
+
+        model.Params.Threads = args.threads
+        model.Params.LogFile = log_path
+        model.optimize()
+        runtime = time.time() - start_time
+
+        write_report(report_path, model, stats, runtime, args.write_vars)
+        return 0
+    except Exception as exc:
+        error_path = os.path.join(args.output_dir, f"{model_name}_error.txt")
+        with open(error_path, "w", encoding="utf-8") as handle:
+            handle.write(f"Error processing {instance_file}: {exc}\n")
+        print(f"Error processing {instance_file}: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

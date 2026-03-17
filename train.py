@@ -100,6 +100,9 @@ parser.add_argument('--negex', type=str,default="iLB") # can be "iLB" or "pertur
 parser.add_argument('--instance_dir', type=str)
 parser.add_argument('--result_dir', type=str)
 parser.add_argument('--var_nfeats', type=int, default = 15)
+parser.add_argument('--learning_rate', type=float, default=1e-5)
+parser.add_argument('--batch_size', type=int, default=16)
+parser.add_argument('--max_train_hours', type=float, default=48.0)
 
 args = parser.parse_args()
 
@@ -121,9 +124,9 @@ log_file = open(f'{log_save_path}{train_task}_train.log', 'wb')
 writer = SummaryWriter(f'{log_save_path}')
 
 #set params
-LEARNING_RATE = 0.00005
+LEARNING_RATE = args.learning_rate
 NB_EPOCHS =9999
-BATCH_SIZE = 8
+BATCH_SIZE = args.batch_size
 NUM_WORKERS = 0
 WEIGHT_NORM=100
 
@@ -255,21 +258,23 @@ def train(epoch, predict, data_loader, optimizer=None,weight_norm=100,loss_funct
             for ind,(sols,vals,negs) in enumerate(zip(target_sols,target_vals, target_negs)):  
                 #compute weight
                 n_vals = vals
-                exp_weight = torch.exp(-n_vals/weight_norm)
-                # print("min", min(exp_weight), "max", max(exp_weight))
-                weight = exp_weight/exp_weight.sum()
+                if args.weight:
+                    exp_weight = torch.exp(-n_vals/weight_norm)
+                    weight = exp_weight/exp_weight.sum()
+                else:
+                    weight = torch.full_like(n_vals, 1.0 / max(1, n_vals.numel()))
                 
-                # get a integer mask
+                # Train on all discrete variables, matching the paper's zero/non-zero target.
                 varInds = batch.varInds[ind]
                 varname_map=varInds[0][0]
-                i_vars=varInds[1][0].long()
+                discrete_vars=varInds[1][0].long()
 
-                #get integer variables
-                sols = sols[:,varname_map][:,i_vars]
+                sols = sols[:, varname_map][:, discrete_vars]
+                sols = (sols.abs() > 1e-8).float()
 
                 # cross-entropy
                 n_var = batch.ntvars[ind]
-                pre_sols = BD[index_arrow:index_arrow + n_var].squeeze()[i_vars]
+                pre_sols = BD[index_arrow:index_arrow + n_var].squeeze()[discrete_vars]
                 index_arrow = index_arrow + n_var
                 pos_loss = -(pre_sols+ 1e-8).log()[None,:]*(sols==1).float()
                 neg_loss = -(1-pre_sols + 1e-8).log()[None,:]*(sols==0).float()
@@ -281,7 +286,8 @@ def train(epoch, predict, data_loader, optimizer=None,weight_norm=100,loss_funct
                 loss += sample_loss.sum()
 
                 if loss_function in ['infoNCEloss', 'hybrid']: 
-                    negs = negs[:,varname_map][:,i_vars]
+                    negs = negs[:, varname_map][:, discrete_vars]
+                    negs = (negs.abs() > 1e-8).float()
 
                     # positive_sample_weights = n_vals/weight_norm #w1
                     # cur_embeddings = torch.cat([pre_sols.reshape(1,-1), sols * positive_sample_weights[:,None], negs * positive_sample_weights[:,None]])
@@ -704,6 +710,7 @@ def train(epoch, predict, data_loader, optimizer=None,weight_norm=100,loss_funct
 optimizer = torch.optim.Adam(PredictModel.parameters(), lr=LEARNING_RATE)
 best_val_loss = 99999
 weight_norm = 100000
+train_start_time = time.time()
 
 # if not args.pretrainModel is None:
 #     valid_loss = train(epoch, PredictModel, valid_loader, None)
@@ -719,6 +726,9 @@ weight_norm = 100000
 #         param.requires_grad = True
 
 for epoch in range(NB_EPOCHS):
+    if time.time() - train_start_time >= args.max_train_hours * 3600:
+        print(f"Stopping after reaching the {args.max_train_hours}-hour training budget.")
+        break
     print(f"Start epoch {epoch}")
     begin=time.time()
     train_loss = train(epoch, PredictModel, train_loader, optimizer, weight_norm, loss_function)
