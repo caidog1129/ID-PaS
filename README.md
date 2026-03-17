@@ -5,33 +5,11 @@ This repository contains research code for training and evaluating graph-based p
 ## Repository layout
 
 - `collect_data.py`: data collection pipeline for Gurobi runs
-- `solve.py`: solve a single instance and export model statistics plus the best solution found
 - `train.py`: train the GAT-based prediction model
 - `evaluate_pas.py`: run the original binary-only PaS search
 - `evaluate_idpas.py`: run the ID-PAS+ search with separate binary and integer zero-fixing tracks
-- `plot.py`: generate result plots
-- `generate.py`: helper script for instance generation
 - `MIPDataset.py`: dataset loading and graph feature construction
 - `GAT.py`: graph attention network policy
-
-## Solving a single instance
-
-`solve.py` now supports a small CLI instead of hard-coded output folders:
-
-```bash
-python solve.py path/to/instance.mps --output-dir reports --log-dir logs --threads 1 --write-vars
-```
-
-The generated report includes:
-
-- runtime
-- solver status
-- objective sense
-- number of solutions found
-- best objective value and bound when available
-- variable and constraint counts by type
-- constraint matrix nonzero count
-- variable assignments when `--write-vars` is enabled and a feasible solution exists
 
 ## Training and search
 
