@@ -1,4 +1,4 @@
-CPAIOR 2026: ID-PaS: Identity-Aware Predict-and-Search for General Mixed-Integer Linear Programs
+ID-PaS+: Identity-Aware Predict-and-Search for General Mixed-Integer Linear Programs
 
 This repository contains research code for training and evaluating graph-based prediction models on MILP instances, then using those predictions inside downstream search procedures.
 
